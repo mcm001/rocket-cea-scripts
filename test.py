@@ -18,7 +18,7 @@ import pandas as pd
 #                                       #  cal/s-cm-degC, W/cm-degC
 
 INCHES_TO_METERS = 25.4 / 1000
-MM_TO_METERS = 1/1000
+MM_TO_METERS = 1 / 1000
 BAR_TO_PA = 100000
 PA_TO_PSI = 0.000145038
 M_TO_FT = 3.28084
@@ -29,13 +29,14 @@ RANKINE_TO_KELVIN = 1 / KELVIN_TO_RANKINE
 FROZEN = 0
 
 G_MPSPS = 9.80655
-CHAMBER_PRESSURES_BAR = np.arange(15, 20, 5)
-MIXURE_RATIOS = np.arange(1, 2, 1)
-THRUST_N = [10] # np.arange(10,11, 1)
+CHAMBER_PRESSURES_BAR = np.arange(10, 20, 3)
+MIXURE_RATIOS = np.arange(1, 2, 0.1)
+THRUST_N = np.arange(10, 15, 1)
 L_STAR_M = 40 * INCHES_TO_METERS
 CHAMBER_DIAMETER_M = 20 * MM_TO_METERS
 
 EXIT_PRESSURE_BAR = 1
+
 
 @dataclass
 class EngineParameters:
@@ -61,12 +62,17 @@ class EngineParameters:
     exit_pressure: float = 0
 
     c_star: float = 0
+    throat_isp_sec: float = 0
+    exit_isp_sec: float = 0
 
-def design_engine(pc_pa, throat_isp_sec, thrust_n, cstar_mps, area_ratio, mixture_ratio):
+
+def design_engine(
+    pc_pa, throat_isp_sec, thrust_n, cstar_mps, area_ratio, mixture_ratio
+):
 
     # V_throat [m/s] = Isp(throat) * g
     effective_exhaust_vel = throat_isp_sec * G_MPSPS
-    
+
     # m-dot [kg/s] = thrust [kg m/s/s] / isp [m/s]
     m_dot_kgps = thrust_n / effective_exhaust_vel
 
@@ -77,11 +83,11 @@ def design_engine(pc_pa, throat_isp_sec, thrust_n, cstar_mps, area_ratio, mixtur
     exit_area = throat_area * area_ratio
 
     # area = pi d^2 / 4 so d = sqrt(4 * area / pi)
-    throat_diameter = math.sqrt(4*throat_area / math.pi)
-    exit_diameter = math.sqrt(4*exit_area / math.pi)
+    throat_diameter = math.sqrt(4 * throat_area / math.pi)
+    exit_diameter = math.sqrt(4 * exit_area / math.pi)
 
     # L-star is defined as typical ratios of chamber volume to nozzle sonic throat cross section
-    # Chamber volume [m^3] = L-star [m] * throat area [m^2] 
+    # Chamber volume [m^3] = L-star [m] * throat area [m^2]
     chamber_volume_m3 = L_STAR_M * throat_area
 
     # chamber volume / chamber cross section = chamber length
@@ -96,13 +102,19 @@ def design_engine(pc_pa, throat_isp_sec, thrust_n, cstar_mps, area_ratio, mixtur
     # mdot-ox = mdot - mdot-fuel
     mdot_fuel = m_dot_kgps / (1 + mixture_ratio)
     mdot_ox = m_dot_kgps - mdot_fuel
-    
-    return (mdot_fuel, mdot_ox, chamber_volume_m3, CHAMBER_DIAMETER_M, chamber_length, throat_diameter, exit_diameter)
+
+    return (
+        mdot_fuel,
+        mdot_ox,
+        chamber_volume_m3,
+        CHAMBER_DIAMETER_M,
+        chamber_length,
+        throat_diameter,
+        exit_diameter,
+    )
 
 
-cea = CEA_Obj(
-    propName="", oxName="O2", fuelName="RP-1"
-)
+cea = CEA_Obj(propName="", oxName="O2", fuelName="RP-1")
 
 # , cstar_units="m/sec", pressure_units="Bar", isp_units="sec"
 
@@ -120,22 +132,58 @@ for pc_bar in CHAMBER_PRESSURES_BAR:
             isp_sec = cea.get_Throat_Isp(pc_psi, mr, FROZEN)
 
             # Determine an area ratio for our Pc/Pexit
-            area_ratio = cea.get_eps_at_PcOvPe(pc_psi, mr, (pc_bar/EXIT_PRESSURE_BAR), frozen=FROZEN)
+            area_ratio = cea.get_eps_at_PcOvPe(
+                pc_psi, mr, (pc_bar / EXIT_PRESSURE_BAR), frozen=FROZEN
+            )
 
-            (mdot_fuel, mdot_ox, chamber_volume, chamber_diam, chamber_length, throat_diameter, exit_diameter) = design_engine(pc_bar * BAR_TO_PA, isp_sec, thrust, cstar_mps, area_ratio, mr)
+            # Get exit isp
+            (exit_isp_sec, mode) = cea.estimate_Ambient_Isp(pc_psi, mr, area_ratio, FROZEN)
+
+            (
+                mdot_fuel,
+                mdot_ox,
+                chamber_volume,
+                chamber_diam,
+                chamber_length,
+                throat_diameter,
+                exit_diameter,
+            ) = design_engine(
+                pc_bar * BAR_TO_PA, isp_sec, thrust, cstar_mps, area_ratio, mr
+            )
 
             # in Rankine
-            (t_chamber, t_throat, t_exit) = cea.get_Temperatures(pc_psi, mr, area_ratio, FROZEN)
+            (t_chamber, t_throat, t_exit) = cea.get_Temperatures(
+                pc_psi, mr, area_ratio, FROZEN
+            )
 
             # contraction ratio = cross-section of chamber/cross-section of throat = (pi d_c^2/4)/(pi d_t^2/4) = d_c^2/d_t^2
-            p_inj_psi = cea.get_Pinj_over_Pcomb(pc_psi, mr, fac_CR=chamber_diam ** 2 / throat_diameter**2) * pc_psi
+            p_inj_psi = (
+                cea.get_Pinj_over_Pcomb(
+                    pc_psi, mr, fac_CR=chamber_diam**2 / throat_diameter**2
+                )
+                * pc_psi
+            )
 
-            r= (EngineParameters(
-                pc_psi, p_inj_psi, area_ratio, mr, thrust,
-                t_chamber * RANKINE_TO_KELVIN, t_throat * RANKINE_TO_KELVIN, t_exit * RANKINE_TO_KELVIN,
-                mdot_fuel, mdot_ox, chamber_volume, chamber_diam, chamber_length, throat_diameter, exit_diameter, EXIT_PRESSURE_BAR * BAR_TO_PA * PA_TO_PSI,
-                cstar_mps
-            ))
+            r = EngineParameters(
+                pc_psi,
+                p_inj_psi,
+                area_ratio,
+                mr,
+                thrust,
+                t_chamber * RANKINE_TO_KELVIN,
+                t_throat * RANKINE_TO_KELVIN,
+                t_exit * RANKINE_TO_KELVIN,
+                mdot_fuel,
+                mdot_ox,
+                chamber_volume,
+                chamber_diam,
+                chamber_length,
+                throat_diameter,
+                exit_diameter,
+                EXIT_PRESSURE_BAR * BAR_TO_PA * PA_TO_PSI,
+                cstar_mps,
+                isp_sec, exit_isp_sec
+            )
             results[pc_bar][mr][thrust] = r
             result_list.append(asdict(r))
 
@@ -149,7 +197,7 @@ if False:
         p_inj = []
         mrs = []
         for mr in results[pressure_bar]:
-            engine:EngineParameters = results[pressure_bar][mr][THRUST_N[0]]
+            engine: EngineParameters = results[pressure_bar][mr][THRUST_N[0]]
             mrs.append(mr)
             exit_temp.append(engine.exit_temp)
             throat_temp.append(engine.throat_temp)
@@ -174,4 +222,4 @@ if False:
 if True:
     df = pd.DataFrame(result_list)
     print(df)
-
+    df.to_csv("results.csv")
