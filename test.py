@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import math
 from rocketcea.cea_obj import CEA_Obj
 from matplotlib import pyplot as plt
 import numpy as np
+import pandas as pd
 
 # isp_units            = 'sec',         # N-s/kg, m/s, km/s
 # cstar_units          = 'm/sec',      # m/s
@@ -17,7 +18,7 @@ import numpy as np
 #                                       #  cal/s-cm-degC, W/cm-degC
 
 INCHES_TO_METERS = 25.4 / 1000
-MM_TO_METERS = 1000
+MM_TO_METERS = 1/1000
 BAR_TO_PA = 100000
 PA_TO_PSI = 0.000145038
 M_TO_FT = 3.28084
@@ -28,8 +29,8 @@ RANKINE_TO_KELVIN = 1 / KELVIN_TO_RANKINE
 FROZEN = 0
 
 G_MPSPS = 9.80655
-CHAMBER_PRESSURES_BAR = np.arange(10, 25, 5)
-MIXURE_RATIOS = np.arange(1, 4, 0.1)
+CHAMBER_PRESSURES_BAR = np.arange(15, 20, 5)
+MIXURE_RATIOS = np.arange(1, 2, 1)
 THRUST_N = [10] # np.arange(10,11, 1)
 L_STAR_M = 40 * INCHES_TO_METERS
 CHAMBER_DIAMETER_M = 20 * MM_TO_METERS
@@ -57,9 +58,9 @@ class EngineParameters:
     throat_diam: float = 0
     exit_diam: float = 0
 
-    expansion_ratio: float = 0
     exit_pressure: float = 0
 
+    c_star: float = 0
 
 def design_engine(pc_pa, throat_isp_sec, thrust_n, cstar_mps, area_ratio, mixture_ratio):
 
@@ -106,6 +107,7 @@ cea = CEA_Obj(
 # , cstar_units="m/sec", pressure_units="Bar", isp_units="sec"
 
 results = {}
+result_list = []
 
 for pc_bar in CHAMBER_PRESSURES_BAR:
     results[pc_bar] = {}
@@ -128,35 +130,48 @@ for pc_bar in CHAMBER_PRESSURES_BAR:
             # contraction ratio = cross-section of chamber/cross-section of throat = (pi d_c^2/4)/(pi d_t^2/4) = d_c^2/d_t^2
             p_inj_psi = cea.get_Pinj_over_Pcomb(pc_psi, mr, fac_CR=chamber_diam ** 2 / throat_diameter**2) * pc_psi
 
-            results[pc_bar][mr][thrust] = (EngineParameters(
+            r= (EngineParameters(
                 pc_psi, p_inj_psi, area_ratio, mr, thrust,
                 t_chamber * RANKINE_TO_KELVIN, t_throat * RANKINE_TO_KELVIN, t_exit * RANKINE_TO_KELVIN,
-                mdot_fuel, mdot_ox, chamber_volume, chamber_diam, chamber_length, throat_diameter, exit_diameter, area_ratio, EXIT_PRESSURE_BAR * BAR_TO_PA * PA_TO_PSI
+                mdot_fuel, mdot_ox, chamber_volume, chamber_diam, chamber_length, throat_diameter, exit_diameter, EXIT_PRESSURE_BAR * BAR_TO_PA * PA_TO_PSI,
+                cstar_mps
             ))
+            results[pc_bar][mr][thrust] = r
+            result_list.append(asdict(r))
 
 
-# want a graph of temperature vs mixture ratio for a given chamber pressure
-for pressure_bar in results:
-    plt.figure()
-    plt.title(f"Pressure: {pressure_bar} bar")
+if False:
+    # want a graph of temperature vs mixture ratio for a given chamber pressure
+    for pressure_bar in results:
+        exit_temp = []
+        throat_temp = []
+        chamber_temp = []
+        p_inj = []
+        mrs = []
+        for mr in results[pressure_bar]:
+            engine:EngineParameters = results[pressure_bar][mr][THRUST_N[0]]
+            mrs.append(mr)
+            exit_temp.append(engine.exit_temp)
+            throat_temp.append(engine.throat_temp)
+            chamber_temp.append(engine.chamber_temp)
 
-    exit_temp = []
-    throat_temp = []
-    chamber_temp = []
-    mrs = []
-    for mr in results[pressure_bar]:
-        engine:EngineParameters = results[pressure_bar][mr][THRUST_N[0]]
-        mrs.append(mr)
-        exit_temp.append(engine.exit_temp)
-        throat_temp.append(engine.throat_temp)
-        chamber_temp.append(engine.chamber_temp)
+        plt.figure()
+        plt.title(f"Pressure: {pressure_bar} bar")
+        plt.plot(mrs, exit_temp, label=f"Exit temp vs mr, Pc={pressure_bar} bar")
+        plt.plot(mrs, throat_temp, label=f"Throat temp vs mr, Pc={pressure_bar} bar")
+        plt.plot(mrs, chamber_temp, label=f"Chamber temp vs mr, Pc={pressure_bar} bar")
+        plt.xlabel("Mixture ratio, O:F")
+        plt.ylabel("Temperature, K")
+        plt.legend()
 
-    plt.plot(mrs, exit_temp, label=f"Exit temp vs mr, Pc={pressure_bar} bar")
-    plt.plot(mrs, throat_temp, label=f"Throat temp vs mr, Pc={pressure_bar} bar")
-    plt.plot(mrs, chamber_temp, label=f"Chamber temp vs mr, Pc={pressure_bar} bar")
-    plt.xlabel("Mixture ratio, O:F")
-    plt.ylabel("Temperature, K")
-    plt.legend()
+        # plt.figure()
+        # plt.title(f"Pressure: {pressure_bar} bar")
+        # plt.scatter(mrs, p_inj, label=f"Injector pressure (psi), Pc={pressure_bar * BAR_TO_PA * PA_TO_PSI} psi")
+        # plt.legend()
 
-plt.show()
-# print(results)
+    plt.show()
+
+if True:
+    df = pd.DataFrame(result_list)
+    print(df)
+

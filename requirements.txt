@@ -2,3 +2,4 @@ numpy
 matplotlib
 rocketcea
 PyQt5
+pandas
